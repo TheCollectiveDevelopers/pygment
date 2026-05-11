@@ -132,12 +132,14 @@ def visualize_samples(
 
         img_rgb = to_pil(og_rgb_tensor)
         img_pred = to_pil(pred)
+        img_soft = to_pil(og_soft_tensor)
 
-        width = img_rgb.width + img_pred.width
-        height = max(img_rgb.height, img_pred.height)
+        width = img_rgb.width + img_pred.width + img_soft.width
+        height = max(img_rgb.height, img_pred.height, img_soft.height)
         canvas = Image.new("RGB", (width, height))
         canvas.paste(img_rgb, (0, 0))
-        canvas.paste(img_pred, (img_rgb.width, 0))
+        canvas.paste(img_soft, (img_rgb.width, 0))
+        canvas.paste(img_pred, (img_rgb.width + img_soft.width, 0))
 
         out_path = os.path.join(output_dir, f"epoch_{epoch:03d}_sample_{i}.png")
         canvas.save(out_path)
@@ -155,6 +157,7 @@ def train(
     criterion = nn.MSELoss()
 
     for epoch in range(1, epochs + 1):
+        print(f"Starting epoch {epoch}/{epochs}...")
         model.train()
         running_loss = 0.0
 
