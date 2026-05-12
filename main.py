@@ -6,14 +6,17 @@ import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
 from image import rgb_to_cmyk, soft_proof, apply_hsl_offsets_torch
 import os
+import time
 
 device = torch.accelerator.current_accelerator().type if torch.accelerator.is_available() else "cpu" #type: ignore
 
+
 class ImageDataset(Dataset):
-    def __init__(self, image_dir: str):
+    def __init__(self, image_dir: str, return_og: bool = False):
         self.image_dir = image_dir
-        self.image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(('.JPG'))]
+        self.image_paths = [os.path.join(image_dir, f) for f in os.listdir(image_dir) if f.endswith(('.jpg', '.jpeg' ,'.JPG', '.png'))]
         self.transform = T.Compose([T.ToTensor()])
+        self.return_og = return_og
 
     def __len__(self):
         return len(self.image_paths)
@@ -21,17 +24,22 @@ class ImageDataset(Dataset):
     def __getitem__(self, index):
         image_path = self.image_paths[index]
         image = Image.open(image_path).convert('RGB')
-        og_image = image.copy()
+        
+        if self.return_og:
+            og_image = image.copy()
+            og_cmyk_image = rgb_to_cmyk(og_image)
+            og_soft_proofed_image = soft_proof(og_cmyk_image)
+            og_tensor = self.transform(og_image)
+            og_soft_tensor = self.transform(og_soft_proofed_image)
+        else:
+            og_tensor = torch.empty(0)
+            og_soft_tensor = torch.empty(0)
+            
         image = image.resize((50, 50), resample=Image.BILINEAR)
 
         cmyk_image = rgb_to_cmyk(image)
         soft_proofed_image = soft_proof(cmyk_image)
 
-        og_cmyk_image = rgb_to_cmyk(og_image)
-        og_soft_proofed_image = soft_proof(og_cmyk_image)
-
-        og_tensor = self.transform(og_image)
-        og_soft_tensor = self.transform(og_soft_proofed_image)
         rgb_tensor = self.transform(image)
         cmyk_tensor = self.transform(cmyk_image)
         soft_tensor = self.transform(soft_proofed_image)
@@ -50,16 +58,20 @@ def collate_batch(batch):
     )
 
 training_data = DataLoader(
-    ImageDataset("./dataset/For_Exposure/train_directory/Normal"),
+    ImageDataset("./dataset/", return_og=False),
     batch_size=16,
     shuffle=True,
+    num_workers=4,
+    pin_memory=True,
     collate_fn=collate_batch,
 )
 
 test_data = DataLoader(
-    ImageDataset("./dataset/For_Exposure/test_directory/Normal"),
+    ImageDataset("./testd/", return_og=True),
     batch_size=16,
     shuffle=False,
+    num_workers=4,
+    pin_memory=True,
     collate_fn=collate_batch,
 )
 
@@ -158,6 +170,9 @@ def train(
 
     for epoch in range(1, epochs + 1):
         print(f"Starting epoch {epoch}/{epochs}...")
+        epoch_start_time = time.time()
+        
+        train_start_time = time.time()
         model.train()
         running_loss = 0.0
 
@@ -177,9 +192,11 @@ def train(
             running_loss += loss.item() * rgb.size(0)
 
         avg_loss = running_loss / len(train_loader.dataset)
-        print(f"Epoch {epoch}/{epochs} - train loss: {avg_loss:.6f}")
+        train_time = time.time() - train_start_time
+        print(f"Epoch {epoch}/{epochs} - train loss: {avg_loss:.6f} (Time: {train_time:.2f}s)")
 
         if test_loader is not None:
+            test_start_time = time.time()
             model.eval()
             test_loss = 0.0
             with torch.no_grad():
@@ -195,8 +212,16 @@ def train(
                     test_loss += loss.item() * rgb.size(0)
 
             avg_test_loss = test_loss / len(test_loader.dataset)
-            print(f"Epoch {epoch}/{epochs} - test loss: {avg_test_loss:.6f}")
+            test_time = time.time() - test_start_time
+            print(f"Epoch {epoch}/{epochs} - test loss: {avg_test_loss:.6f} (Time: {test_time:.2f}s)")
+            
+            vis_start_time = time.time()
             visualize_samples(model, test_loader, device, output_dir, epoch)
+            vis_time = time.time() - vis_start_time
+            print(f"Epoch {epoch}/{epochs} - visualization time: {vis_time:.2f}s")
+            
+        epoch_time = time.time() - epoch_start_time
+        print(f"Epoch {epoch}/{epochs} - total time: {epoch_time:.2f}s")
 
 
 if __name__ == "__main__":
